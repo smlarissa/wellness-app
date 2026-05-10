@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>My Wellness</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0f0f11;color:#edeae4;font-family:'DM Mono','Courier New',monospace;min-height:100vh;padding-bottom:60px}
+  input{background:#17171b;border:1px solid #2c2c36;border-radius:10px;color:#edeae4;padding:9px 13px;font-size:13px;outline:none;font-family:inherit;box-sizing:border-box;width:100%}
+  button{font-family:inherit;cursor:pointer;transition:all 0.18s}
+  ::-webkit-scrollbar{width:4px;height:4px}
+  ::-webkit-scrollbar-track{background:#0f0f11}
+  ::-webkit-scrollbar-thumb{background:#2c2c36;border-radius:2px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef} = React;
+
+const API_KEY_STORAGE = 'wellness_api_key';
+
+async function aiCall(system, userMsg) {
+  const key = localStorage.getItem(API_KEY_STORAGE);
+  if (!key) throw new Error("NO_KEY");
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method:"POST",
+    headers:{"Content-Type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system,messages:[{role:"user",content:userMsg}]})
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error.message);
+  const txt = d.content?.map(b=>b.text||"").join("")||"";
+  return JSON.parse(txt.replace(/```json|```/g,"").trim());
+}
+
+async function lookupFood(desc) {
+  return aiCall(
+    `You are a nutrition database that knows Brazilian and American foods fluently. Return ONLY raw JSON, no markdown. Schema: {"name":"...","calories":number,"protein":number,"carbs":number,"fat":number,"serving":"...","inflammation":"low"|"medium"|"high","inflammationReason":"one plain sentence","swap":"better alternative or null"}. Inflammation: low=anti-inflammatory (fish,berries,leaves,olive oil,nuts,eggs,avocado,feijão,frango,açaí); medium=neutral; high=processed,seed oils,refined sugar,gluten,alcohol,fritura. Macros in grams to 1 decimal. Calories whole number.`,
+    `Food: ${desc}`
+  );
+}
+
+async function proofWorkout(exercises) {
+  return aiCall(
+    `You review workout plans for a 44yo woman with lipedema doing body recomposition. Equipment: 4lb dumbbells, resistance bands 10-30lb. Goal: toned/athletic feminine look, no bulk. Return ONLY raw JSON. Schema: {"overallVerdict":"Safe"|"Mostly Safe"|"Review Needed","summary":"2 plain sentences","items":[{"exercise":"...","status":"good"|"caution"|"flag","reason":"plain sentence","alternative":"if flag/caution else null","trainerQuestion":"question to ask trainer or null"}]}. Be direct. No fluff. Flag: high-impact moves, excessive lower limb load, lymphatic stress risk.`,
+    `Exercises: ${JSON.stringify(exercises)}`
+  );
+}
+
+const PROFILE = {
+  train:{calories:1480,protein:115,carbs:120,fat:55},
+  rest: {calories:1320,protein:115,carbs:75, fat:55},
+  vacation:{calories:1550,protein:120,carbs:150,fat:60},
+};
+const INFLAM = {
+  low:  {color:"#6db88a",label:"Anti-inflammatory"},
+  medium:{color:"#c9a050",label:"Neutral"},
+  high: {color:"#d9605a",label:"Inflammatory"},
+};
+const TRAVEL_WORKOUTS = [
+  {focus:"Upper Body",dur:"25 min",exercises:[
+    {name:"Push-up",sets:"3×12",tip:"Hands wide for chest, narrow for triceps"},
+    {name:"Pike Push-up",sets:"3×10",tip:"Hips high — hits shoulders"},
+    {name:"Tricep Dip (chair)",sets:"3×12",tip:"Use hotel chair, elbows back"},
+    {name:"Superman Hold",sets:"3×15s",tip:"Back activation, lie face down"},
+    {name:"Plank",sets:"3×30s",tip:"Core tight, don't hold breath"},
+  ]},
+  {focus:"Lower Body",dur:"25 min",exercises:[
+    {name:"Bodyweight Squat",sets:"4×15",tip:"Slow descent, 3 seconds down"},
+    {name:"Reverse Lunge",sets:"3×12 ea",tip:"Lower impact than forward lunge"},
+    {name:"Glute Bridge",sets:"4×15",tip:"Squeeze hard at top, hold 1s"},
+    {name:"Hip Abduction (side-lying)",sets:"3×20 ea",tip:"Slow, controlled — outer thigh"},
+    {name:"Calf Raise (single leg)",sets:"3×15 ea",tip:"Use wall for balance"},
+  ]},
+  {focus:"Full Body",dur:"30 min",exercises:[
+    {name:"Squat to Press",sets:"3×12",tip:"Explosive up, controlled down"},
+    {name:"Push-up",sets:"3×10",tip:"Full range"},
+    {name:"Glute Bridge",sets:"3×15",tip:"Core and glutes together"},
+    {name:"Mountain Climber (slow)",sets:"3×20",tip:"Core only — no bouncing"},
+    {name:"Dead Bug",sets:"3×10 ea",tip:"Back flat on floor throughout"},
+  ]},
+  {focus:"Recovery",dur:"20 min",exercises:[
+    {name:"City walking",sets:"30–60 min",tip:"Best thing for lymphatics on holiday"},
+    {name:"Hip flexor stretch",sets:"2×45s ea",tip:"Lunge position, sink hips"},
+    {name:"Cat-cow",sets:"2×10",tip:"Slow, breathe through each rep"},
+    {name:"Leg elevation",sets:"10 min",tip:"Feet above hips — lymphatic drain"},
+  ]},
+];
+const MEASURE_FIELDS = [
+  {key:"weight",label:"Weight",unit:"kg"},{key:"waist",label:"Waist",unit:"cm"},
+  {key:"hips",label:"Hips",unit:"cm"},{key:"thigh_l",label:"Thigh L",unit:"cm"},
+  {key:"thigh_r",label:"Thigh R",unit:"cm"},{key:"calf_l",label:"Calf L",unit:"cm"},
+  {key:"calf_r",label:"Calf R",unit:"cm"},{key:"chest",label:"Chest",unit:"cm"},
+  {key:"arm_l",label:"Arm L",unit:"cm"},{key:"arm_r",label:"Arm R",unit:"cm"},
+  {key:"shoulders",label:"Shoulders",unit:"cm"},
+];
+const MEAL_IDEAS = {
+  breakfast:["Greek yogurt + blueberries + walnuts + chia seeds","2 eggs + smoked salmon + avocado","Smoothie: spinach, berries, protein powder, flaxseed, almond milk","Chia pudding (coconut milk) + raspberries + hemp seeds","Tapioca + frango desfiado + abacate"],
+  lunch:["Frango grelhado + quinoa + batata-doce + azeite","Atum + folhas verdes + pepino + sementes de abóbora","Turkey lettuce wraps + avocado + tomato","Salmão + brócolis no vapor + arroz integral","Feijão + arroz integral + frango + salada"],
+  dinner:["Bacalhau assado + aspargo + purê de couve-flor","Frango refogado (shoyu, gengibre, alho) + abobrinha","Carne moída magra + molho de tomate + massa de abobrinha","Camarão + curry (leite de coco, cúrcuma) + arroz de couve-flor"],
+  snacks:["2 ovos cozidos + aipo","Cottage cheese + pepino fatiado","Mix de castanhas + chá verde","Shake de proteína + banana pequena","Açaí sem guaraná + granola sem glúten"],
+};
+const DAYS=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const C={bg:"#0f0f11",surface:"#17171b",card:"#1e1e24",border:"#2c2c36",rose:"#d9605a",roseL:"#e89490",sage:"#6db88a",gold:"#c9a050",sky:"#5a9fd9",text:"#edeae4",muted:"#888899",danger:"#d9605a"};
+
+const Card=({children,style={}})=><div style={{background:C.card,borderRadius:14,border:`1px solid ${C.border}`,padding:"16px 18px",...style}}>{children}</div>;
+const Lbl=({children,color=C.muted})=><div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",textTransform:"uppercase",color,marginBottom:8}}>{children}</div>;
+const Pill=({children,color=C.rose})=><span style={{background:color+"20",color,borderRadius:20,padding:"3px 9px",fontSize:10,fontWeight:700,letterSpacing:"0.05em",textTransform:"uppercase"}}>{children}</span>;
+const Btn=({children,active,color=C.rose,onClick,style={},disabled=false,small=false})=>(
+  <button onClick={onClick} disabled={disabled} style={{background:active?color:"transparent",border:`1px solid ${active?color:C.border}`,color:active?"#fff":C.muted,borderRadius:10,padding:small?"5px 11px":"8px 16px",fontSize:small?10:12,fontWeight:700,cursor:disabled?"not-allowed":"pointer",opacity:disabled?0.4:1,letterSpacing:"0.04em",...style}}>{children}</button>
+);
+const MacroBar=({label,current,target,color})=>{
+  const pct=Math.min(100,Math.round((current/target)*100));
+  const over=current>target;
+  return <div style={{marginBottom:11}}>
+    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+      <span style={{fontSize:11,color:C.muted,fontWeight:600}}>{label}</span>
+      <span style={{fontSize:11,color:over?C.danger:C.text,fontWeight:700}}>{Math.round(current)}g <span style={{color:C.muted,fontWeight:400}}>/ {target}g</span></span>
+    </div>
+    <div style={{background:C.border,borderRadius:6,height:6,overflow:"hidden"}}>
+      <div style={{width:`${pct}%`,height:"100%",borderRadius:6,background:over?C.danger:color,transition:"width 0.4s"}}/>
+    </div>
+  </div>;
+};
+
+function useSessionTimer(){
+  const [elapsed,setElapsed]=useState(0);
+  const [running,setRunning]=useState(false);
+  const ref=useRef(null);
+  useEffect(()=>{
+    if(running){ref.current=setInterval(()=>setElapsed(e=>e+1),1000);}
+    else clearInterval(ref.current);
+    return()=>clearInterval(ref.current);
+  },[running]);
+  const fmt=s=>`${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+  return{elapsed,running,fmt,toggle:()=>setRunning(r=>!r),reset:()=>{setElapsed(0);setRunning(false);}};
+}
+function useRestTimer(){
+  const [rest,setRest]=useState(0);
+  const [active,setActive]=useState(false);
+  const [total,setTotal]=useState(60);
+  const ref=useRef(null);
+  useEffect(()=>{
+    if(active&&rest>0){ref.current=setInterval(()=>setRest(r=>{if(r<=1){setActive(false);return 0;}return r-1;}),1000);}
+    else clearInterval(ref.current);
+    return()=>clearInterval(ref.current);
+  },[active,rest]);
+  const start=s=>{setTotal(s);setRest(s);setActive(true);};
+  return{rest,active,total,start};
+}
+
+function inflamScore(entries){
+  if(!entries.length)return null;
+  const map={low:0,medium:1,high:2};
+  const avg=entries.reduce((s,e)=>s+(map[e.inflammation]??1),0)/entries.length;
+  if(avg<0.4)return{label:"Excellent",color:C.sage,pct:10};
+  if(avg<0.9)return{label:"Good",color:C.sage,pct:35};
+  if(avg<1.4)return{label:"Moderate",color:C.gold,pct:62};
+  return{label:"High",color:C.danger,pct:88};
+}
+
+function ApiKeySetup({onSave}){
+  const [k,setK]=useState("");
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <Card style={{maxWidth:360,width:"100%"}}>
+        <Lbl color={C.rose}>Setup Required</Lbl>
+        <p style={{fontSize:13,color:C.muted,lineHeight:1.7,marginBottom:16}}>
+          To use AI food search and workout proofer, you need a free Anthropic API key.<br/><br/>
+          Get one at <span style={{color:C.sky}}>console.anthropic.com</span> → API Keys → Create Key
+        </p>
+        <input value={k} onChange={e=>setK(e.target.value)} placeholder="sk-ant-..." style={{marginBottom:12}}/>
+        <Btn active color={C.rose} onClick={()=>{if(k.trim()){localStorage.setItem(API_KEY_STORAGE,k.trim());onSave();}}} style={{width:"100%",padding:11,fontSize:13}}>
+          Save & Start
+        </Btn>
+      </Card>
+    </div>
+  );
+}
+
+function App(){
+  const [hasKey,setHasKey]=useState(!!localStorage.getItem(API_KEY_STORAGE));
+  const [tab,setTab]=useState("today");
+  const [dayType,setDayType]=useState("train");
+  const targets=PROFILE[dayType]||PROFILE.train;
+  const [vacDest,setVacDest]=useState("");
+  const [vacStart,setVacStart]=useState("");
+  const [vacEnd,setVacEnd]=useState("");
+  const [log,setLog]=useState({calories:0,protein:0,carbs:0,fat:0});
+  const [entries,setEntries]=useState([]);
+  const [saved,setSaved]=useState(()=>{try{return JSON.parse(localStorage.getItem("wellness_saved")||"[]");}catch{return[];}});
+  const [water,setWater]=useState(0);
+  const [foodQ,setFoodQ]=useState("");
+  const [aiFood,setAiFood]=useState(null);
+  const [foodLoading,setFoodLoading]=useState(false);
+  const [foodErr,setFoodErr]=useState("");
+  const [showSaved,setShowSaved]=useState(false);
+  const [proofList,setProofList]=useState([{name:"",sets:"",reps:""}]);
+  const [proofResult,setProofResult]=useState(null);
+  const [proofLoading,setProofLoading]=useState(false);
+  const [proofErr,setProofErr]=useState("");
+  const session=useSessionTimer();
+  const restT=useRestTimer();
+  const [measurements,setMeasurements]=useState(()=>{try{return JSON.parse(localStorage.getItem("wellness_measures")||"[]");}catch{return[];}});
+  const [newM,setNewM]=useState({});
+  const [showMForm,setShowMForm]=useState(false);
+  const [mealTab,setMealTab]=useState("breakfast");
+  const [vacWorkout,setVacWorkout]=useState(0);
+
+  useEffect(()=>{localStorage.setItem("wellness_saved",JSON.stringify(saved));},[saved]);
+  useEffect(()=>{localStorage.setItem("wellness_measures",JSON.stringify(measurements));},[measurements]);
+
+  if(!hasKey)return <ApiKeySetup onSave={()=>setHasKey(true)}/>;
+
+  const calLeft=targets.calories-log.calories;
+  const calPct=Math.min(100,Math.round((log.calories/targets.calories)*100));
+  const iScore=inflamScore(entries);
+
+  const searchFood=async()=>{
+    if(!foodQ.trim())return;
+    setFoodLoading(true);setAiFood(null);setFoodErr("");
+    try{setAiFood(await lookupFood(foodQ));}
+    catch(e){setFoodErr(e.message==="NO_KEY"?"No API key set.":"Couldn't find that. Try: '150g frango grelhado' or '2 scrambled eggs'");}
+    finally{setFoodLoading(false);}
+  };
+
+  const addFood=(item)=>{
+    const e={name:item.name,serving:item.serving,cal:item.calories,pro:item.protein,carb:item.carbs,fat:item.fat,inflammation:item.inflammation,inflammationReason:item.inflammationReason,swap:item.swap};
+    setEntries(p=>[...p,e]);
+    setLog(p=>({calories:p.calories+item.calories,protein:p.protein+item.protein,carbs:p.carbs+item.carbs,fat:p.fat+item.fat}));
+    setSaved(p=>p.find(s=>s.name.toLowerCase()===item.name.toLowerCase())?p:[item,...p].slice(0,40));
+    setAiFood(null);setFoodQ("");
+  };
+  const removeFood=(idx)=>{
+    const e=entries[idx];
+    setLog(p=>({calories:Math.max(0,p.calories-e.cal),protein:Math.max(0,p.protein-e.pro),carbs:Math.max(0,p.carbs-e.carb),fat:Math.max(0,p.fat-e.fat)}));
+    setEntries(p=>p.filter((_,i)=>i!==idx));
+  };
+  const addExRow=()=>setProofList(p=>[...p,{name:"",sets:"",reps:""}]);
+  const updateEx=(i,k,v)=>setProofList(p=>p.map((x,j)=>j===i?{...x,[k]:v}:x));
+  const removeEx=(i)=>setProofList(p=>p.filter((_,j)=>j!==i));
+  const runProof=async()=>{
+    const clean=proofList.filter(x=>x.name.trim());
+    if(!clean.length)return;
+    setProofLoading(true);setProofResult(null);setProofErr("");
+    try{setProofResult(await proofWorkout(clean));}
+    catch(e){setProofErr(e.message==="NO_KEY"?"No API key set.":"Something went wrong. Try again.");}
+    finally{setProofLoading(false);}
+  };
+  const saveMeasure=()=>{
+    setMeasurements(p=>[{date:new Date().toLocaleDateString("en-GB"),...newM},...p]);
+    setNewM({});setShowMForm(false);
+  };
+  const verdictColor={"Safe":C.sage,"Mostly Safe":C.gold,"Review Needed":C.danger};
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'DM Mono','Courier New',monospace",paddingBottom:60}}>
+      {/* Header */}
+      <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"18px 18px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+          <div>
+            <div style={{fontSize:10,color:C.rose,fontWeight:800,letterSpacing:"0.14em",marginBottom:4}}>WELLNESS // v2</div>
+            <div style={{fontSize:20,fontWeight:700}}>{dayType==="vacation"?`✈ ${vacDest||"Vacation"}`:"My Dashboard"}</div>
+            <div style={{marginTop:6,display:"flex",gap:5,flexWrap:"wrap"}}>
+              <Pill color={C.rose}>Lipedema</Pill>
+              <Pill color={C.sage}>Recomposition</Pill>
+              <Pill color={C.gold}>Gluten-Free</Pill>
+              {dayType==="vacation"&&<Pill color={C.sky}>Vacation</Pill>}
+            </div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:10,color:C.muted}}>{dayType==="vacation"?"Vacation":dayType==="train"?"Train day":"Rest day"}</div>
+            <div style={{fontSize:24,fontWeight:800,color:C.rose,lineHeight:1.1}}>{targets.calories}</div>
+            <div style={{fontSize:10,color:C.muted}}>kcal</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          {[["train","🏋️ Train"],["rest","🌿 Rest"],["vacation","✈ Vacation"]].map(([k,l])=>(
+            <Btn key={k} active={dayType===k} color={k==="train"?C.rose:k==="rest"?C.sage:C.sky} onClick={()=>setDayType(k)} style={{flex:1,fontSize:10,padding:"7px 4px"}}>{l}</Btn>
+          ))}
+        </div>
+      </div>
+
+      {/* Nav */}
+      <div style={{display:"flex",borderBottom:`1px solid ${C.border}`,background:C.surface,overflowX:"auto"}}>
+        {[{id:"today",l:"Today"},{id:"workout",l:"Workout"},{id:"food",l:"Food"},{id:"progress",l:"Progress"},{id:"profile",l:"Profile"}].map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{background:"transparent",border:"none",color:tab===t.id?C.rose:C.muted,borderBottom:tab===t.id?`2px solid ${C.rose}`:"2px solid transparent",padding:"12px 12px 10px",fontSize:11,fontWeight:800,cursor:"pointer",whiteSpace:"nowrap",fontFamily:"inherit",letterSpacing:"0.06em",textTransform:"uppercase",flex:"1 0 auto"}}>{t.l}</button>
+        ))}
+      </div>
+
+      <div style={{padding:"16px 16px",maxWidth:600,margin:"0 auto"}}>
+
+        {/* TODAY */}
+        {tab==="today"&&<div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <Card>
+            <div style={{display:"flex",alignItems:"center",gap:16}}>
+              <div style={{position:"relative",width:72,height:72,flexShrink:0}}>
+                <svg width="72" height="72" style={{transform:"rotate(-90deg)"}}>
+                  <circle cx="36" cy="36" r="28" fill="none" stroke={C.border} strokeWidth="6"/>
+                  <circle cx="36" cy="36" r="28" fill="none" stroke={calLeft<0?C.danger:C.rose} strokeWidth="6"
+                    strokeDasharray={`${2*Math.PI*28}`} strokeDashoffset={`${2*Math.PI*28*(1-calPct/100)}`}
+                    strokeLinecap="round" style={{transition:"stroke-dashoffset 0.5s"}}/>
+                </svg>
+                <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <span style={{fontSize:13,fontWeight:800}}>{calPct}%</span>
+                </div>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:10,color:C.muted,fontWeight:700,letterSpacing:"0.08em"}}>CALORIES</div>
+                <div style={{fontSize:22,fontWeight:800,lineHeight:1.1}}>{log.calories}<span style={{fontSize:12,color:C.muted,fontWeight:400}}> kcal</span></div>
+                <div style={{fontSize:12,color:calLeft<0?C.danger:C.sage,fontWeight:600,marginTop:2}}>{calLeft>=0?`${calLeft} left`:`${Math.abs(calLeft)} over`}</div>
+              </div>
+            </div>
+          </Card>
+
+          <Card>
+            <Lbl>Macros</Lbl>
+            <MacroBar label="Protein" current={log.protein} target={targets.protein} color={C.rose}/>
+            <MacroBar label="Carbs" current={log.carbs} target={targets.carbs} color={C.gold}/>
+            <MacroBar label="Fat" current={log.fat} target={targets.fat} color={C.sage}/>
+          </Card>
+
+          <Card>
+            <Lbl>Inflammation Score</Lbl>
+            {iScore?(<>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                <div style={{flex:1,background:C.border,borderRadius:6,height:7,overflow:"hidden"}}>
+                  <div style={{width:`${iScore.pct}%`,height:"100%",background:iScore.color,borderRadius:6,transition:"width 0.5s"}}/>
+                </div>
+                <span style={{fontSize:13,fontWeight:800,color:iScore.color,minWidth:70}}>{iScore.label}</span>
+              </div>
+              {entries.filter(e=>e.inflammation==="high").map((e,i)=>(
+                <div key={i} style={{fontSize:12,color:C.muted,marginBottom:3,paddingLeft:8,borderLeft:`2px solid ${C.danger}`}}>
+                  <span style={{color:C.text}}>{e.name}</span>{e.swap&&<span> — try <span style={{color:C.sage}}>{e.swap}</span></span>}
+                </div>
+              ))}
+            </>):<div style={{fontSize:12,color:C.muted}}>Log food to see your score.</div>}
+          </Card>
+
+          <Card>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <Lbl>Water</Lbl>
+                <div style={{fontSize:18,fontWeight:800}}>{water}<span style={{fontSize:12,color:C.muted,fontWeight:400}}> / 8</span></div>
+                <div style={{fontSize:11,color:C.sage,marginTop:2}}>Supports lymphatic flow</div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <Btn onClick={()=>setWater(w=>Math.max(0,w-1))} style={{padding:"7px 13px",fontSize:16}}>−</Btn>
+                <Btn active color={C.sage} onClick={()=>setWater(w=>Math.min(12,w+1))} style={{padding:"7px 13px",fontSize:16}}>+</Btn>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:4,marginTop:10}}>
+              {Array.from({length:8}).map((_,i)=>(
+                <div key={i} style={{flex:1,height:5,borderRadius:4,background:i<water?C.sage:C.border,transition:"background 0.2s"}}/>
+              ))}
+            </div>
+          </Card>
+
+          <Card>
+            <Lbl>Log Food</Lbl>
+            <div style={{display:"flex",gap:8,marginBottom:8}}>
+              <input value={foodQ} onChange={e=>{setFoodQ(e.target.value);setAiFood(null);setFoodErr("");}} onKeyDown={e=>e.key==="Enter"&&searchFood()} placeholder="e.g. frango grelhado 150g / 2 eggs" style={{flex:1}}/>
+              <Btn active onClick={searchFood} disabled={foodLoading||!foodQ.trim()} style={{flexShrink:0,padding:"8px 14px"}}>{foodLoading?"…":"Go"}</Btn>
+            </div>
+            <Btn small onClick={()=>setShowSaved(s=>!s)} style={{marginBottom:8}}>{showSaved?`Hide saved (${saved.length})`:`Saved foods (${saved.length})`}</Btn>
+            {showSaved&&saved.length>0&&(
+              <div style={{background:C.surface,borderRadius:10,padding:"10px 12px",marginBottom:10,maxHeight:160,overflowY:"auto"}}>
+                {saved.map((s,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:i<saved.length-1?`1px solid ${C.border}`:"none"}}>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:600}}>{s.name}</div>
+                      <div style={{fontSize:10,color:C.muted}}>{s.serving} · {s.calories} kcal</div>
+                    </div>
+                    <Btn small active color={C.sage} onClick={()=>addFood(s)}>+ Add</Btn>
+                  </div>
+                ))}
+              </div>
+            )}
+            {foodErr&&<div style={{fontSize:12,color:C.danger,marginTop:6}}>{foodErr}</div>}
+            {aiFood&&(
+              <div style={{background:C.surface,borderRadius:12,padding:"14px",marginTop:8,border:`1px solid ${C.sage}44`}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                  <div>
+                    <div style={{fontSize:14,fontWeight:700}}>{aiFood.name}</div>
+                    <div style={{fontSize:11,color:C.muted}}>{aiFood.serving}</div>
+                  </div>
+                  <div style={{fontSize:18,fontWeight:800,color:C.rose}}>{aiFood.calories} kcal</div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:10}}>
+                  {[["Protein",aiFood.protein,C.rose],["Carbs",aiFood.carbs,C.gold],["Fat",aiFood.fat,C.sage]].map(([l,v,col])=>(
+                    <div key={l} style={{textAlign:"center",background:C.card,borderRadius:8,padding:"8px 4px"}}>
+                      <div style={{fontSize:15,fontWeight:800,color:col}}>{v}g</div>
+                      <div style={{fontSize:10,color:C.muted}}>{l}</div>
+                    </div>
+                  ))}
+                </div>
+                {aiFood.inflammation&&(
+                  <div style={{background:INFLAM[aiFood.inflammation].color+"18",border:`1px solid ${INFLAM[aiFood.inflammation].color}33`,borderRadius:8,padding:"8px 12px",marginBottom:10}}>
+                    <div style={{fontSize:11,fontWeight:700,color:INFLAM[aiFood.inflammation].color,marginBottom:3}}>● {INFLAM[aiFood.inflammation].label}</div>
+                    <div style={{fontSize:11,color:C.muted}}>{aiFood.inflammationReason}</div>
+                    {aiFood.swap&&<div style={{fontSize:11,color:C.sage,marginTop:4}}>Swap: {aiFood.swap}</div>}
+                  </div>
+                )}
+                <div style={{display:"flex",gap:8}}>
+                  <Btn active color={C.sage} onClick={()=>addFood(aiFood)} style={{flex:1}}>✓ Add</Btn>
+                  <Btn onClick={()=>{setAiFood(null);setFoodQ("");}} style={{padding:"8px 14px"}}>✕</Btn>
+                </div>
+              </div>
+            )}
+          </Card>
+
+          {entries.length>0&&<Card>
+            <Lbl>Today's log</Lbl>
+            {entries.map((e,i)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"8px 0",borderBottom:i<entries.length-1?`1px solid ${C.border}`:"none"}}>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:5}}>
+                    {e.inflammation&&<span style={{color:INFLAM[e.inflammation]?.color,fontSize:9}}>●</span>}
+                    <span style={{fontSize:13,fontWeight:600}}>{e.name}</span>
+                  </div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>{e.serving&&`${e.serving} · `}P:{e.pro}g C:{e.carb}g F:{e.fat}g</div>
+                  {e.swap&&<div style={{fontSize:11,color:C.sage,marginTop:2}}>Swap: {e.swap}</div>}
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:8}}>
+                  <span style={{fontSize:13,fontWeight:700,color:C.rose}}>{e.cal} kcal</span>
+                  <button onClick={()=>removeFood(i)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16,padding:0}}>×</button>
+                </div>
+              </div>
+            ))}
+          </Card>}
+        </div>}
+
+        {/* WORKOUT */}
+        {tab==="workout"&&<div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <Card>
+            <Lbl>Session Timer</Lbl>
+            <div style={{display:"flex",alignItems:"center",gap:14}}>
+              <div style={{fontSize:34,fontWeight:800,color:session.running?C.rose:C.muted,letterSpacing:"0.04em",fontVariantNumeric:"tabular-nums"}}>{session.fmt(session.elapsed)}</div>
+              <div style={{display:"flex",gap:8}}>
+                <Btn active={session.running} color={C.rose} onClick={session.toggle}>{session.running?"Pause":session.elapsed>0?"Resume":"Start"}</Btn>
+                {session.elapsed>0&&<Btn onClick={session.reset}>Reset</Btn>}
+              </div>
+            </div>
+          </Card>
+
+          <Card>
+            <Lbl>Rest Timer</Lbl>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:restT.active?10:0}}>
+              <div style={{fontSize:26,fontWeight:800,color:restT.active?C.gold:C.muted,minWidth:64,fontVariantNumeric:"tabular-nums"}}>{restT.active?`${restT.rest}s`:"—"}</div>
+              {[30,45,60,90].map(s=><Btn key={s} small active={restT.active&&restT.rest===s} color={C.gold} onClick={()=>restT.start(s)}>{s}s</Btn>)}
+            </div>
+            {restT.active&&<div style={{background:C.border,borderRadius:6,height:5}}>
+              <div style={{height:"100%",borderRadius:6,background:C.gold,transition:"width 1s linear",width:`${(restT.rest/restT.total)*100}%`}}/>
+            </div>}
+          </Card>
+
+          {dayType==="vacation"&&<Card style={{border:`1px solid ${C.sky}44`}}>
+            <Lbl color={C.sky}>Travel Workout — No Equipment</Lbl>
+            <div style={{display:"flex",gap:6,marginBottom:12,overflowX:"auto"}}>
+              {TRAVEL_WORKOUTS.map((w,i)=><Btn key={i} small active={vacWorkout===i} color={C.sky} onClick={()=>setVacWorkout(i)} style={{flexShrink:0}}>{w.focus}</Btn>)}
+            </div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:12}}>~{TRAVEL_WORKOUTS[vacWorkout].dur} · no equipment needed</div>
+            {TRAVEL_WORKOUTS[vacWorkout].exercises.map((ex,i)=>(
+              <div key={i} style={{background:C.surface,borderRadius:10,padding:"10px 12px",marginBottom:8,border:`1px solid ${C.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{fontSize:13,fontWeight:700}}>{ex.name}</span>
+                  <Pill color={C.gold}>{ex.sets}</Pill>
+                </div>
+                <div style={{fontSize:11,color:C.muted}}>{ex.tip}</div>
+              </div>
+            ))}
+            <div style={{marginTop:10,background:C.sky+"12",borderRadius:10,padding:"10px 12px",border:`1px solid ${C.sky}33`}}>
+              <div style={{fontSize:10,color:C.sky,fontWeight:800,marginBottom:6}}>LIPEDEMA TRAVEL TIPS</div>
+              <div style={{fontSize:11,color:C.muted,lineHeight:1.7}}>• Compression on long flights<br/>• Walk every hour on planes<br/>• Drink water, not just coffee and wine<br/>• Elevate legs in hotel after long days<br/>• Walking tours count — city walking is great</div>
+            </div>
+          </Card>}
+
+          {dayType==="vacation"&&<Card>
+            <Lbl>Back Home — Re-entry Plan</Lbl>
+            {[{week:"Week 1",label:"Bridge",note:"Drop to 2 sets per exercise. Same movements, less volume. Let your body remember.",color:C.gold},{week:"Week 2",label:"Back to normal",note:"Return to full program. You'll be close to where you left off. Any soreness is normal, not regression.",color:C.sage}].map((r,i)=>(
+              <div key={i} style={{background:C.surface,borderRadius:10,padding:"12px",marginBottom:8,border:`1px solid ${C.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><span style={{fontSize:13,fontWeight:700}}>{r.week}</span><Pill color={r.color}>{r.label}</Pill></div>
+                <div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>{r.note}</div>
+              </div>
+            ))}
+            <div style={{fontSize:11,color:C.muted,marginTop:4,lineHeight:1.6}}>Any puffiness after travel is fluid, not fat. Settles in a few days. Don't let the scale mislead you.</div>
+          </Card>}
+
+          <Card>
+            <Lbl>Workout Proofer</Lbl>
+            <div style={{fontSize:12,color:C.muted,marginBottom:12,lineHeight:1.6}}>Enter your trainer's exercises. Each one gets checked for lipedema risks.</div>
+            {proofList.map((ex,i)=>(
+              <div key={i} style={{display:"flex",gap:6,marginBottom:8,alignItems:"center"}}>
+                <input value={ex.name} onChange={e=>updateEx(i,"name",e.target.value)} placeholder="Exercise" style={{flex:2}}/>
+                <input value={ex.sets} onChange={e=>updateEx(i,"sets",e.target.value)} placeholder="Sets" style={{flex:1}}/>
+                <input value={ex.reps} onChange={e=>updateEx(i,"reps",e.target.value)} placeholder="Reps" style={{flex:1}}/>
+                {proofList.length>1&&<button onClick={()=>removeEx(i)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:18,padding:"0 4px"}}>×</button>}
+              </div>
+            ))}
+            <div style={{display:"flex",gap:8,marginTop:6}}>
+              <Btn small onClick={addExRow}>+ Add</Btn>
+              <Btn small active color={C.rose} onClick={runProof} disabled={proofLoading||!proofList.some(x=>x.name.trim())}>{proofLoading?"Checking…":"Proof it"}</Btn>
+            </div>
+            {proofErr&&<div style={{fontSize:12,color:C.danger,marginTop:8}}>{proofErr}</div>}
+            {proofResult&&<div style={{marginTop:14}}>
+              <div style={{background:(verdictColor[proofResult.overallVerdict]||C.muted)+"18",borderRadius:10,padding:"12px",marginBottom:12}}>
+                <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:4}}>VERDICT</div>
+                <div style={{fontSize:15,fontWeight:800,color:verdictColor[proofResult.overallVerdict]||C.muted}}>{proofResult.overallVerdict}</div>
+                <div style={{fontSize:12,color:C.muted,marginTop:4,lineHeight:1.5}}>{proofResult.summary}</div>
+              </div>
+              {proofResult.items?.map((item,i)=>(
+                <div key={i} style={{background:C.surface,borderRadius:10,padding:"12px",marginBottom:8,borderLeft:`3px solid ${item.status==="good"?C.sage:item.status==="caution"?C.gold:C.danger}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><span style={{fontSize:13,fontWeight:700}}>{item.exercise}</span><Pill color={item.status==="good"?C.sage:item.status==="caution"?C.gold:C.danger}>{item.status}</Pill></div>
+                  <div style={{fontSize:12,color:C.muted,lineHeight:1.5}}>{item.reason}</div>
+                  {item.alternative&&<div style={{fontSize:12,color:C.sage,marginTop:5}}>Try: {item.alternative}</div>}
+                  {item.trainerQuestion&&<div style={{fontSize:12,color:C.sky,marginTop:5,fontStyle:"italic"}}>Ask trainer: "{item.trainerQuestion}"</div>}
+                </div>
+              ))}
+            </div>}
+          </Card>
+        </div>}
+
+        {/* FOOD */}
+        {tab==="food"&&<div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <Card style={{background:"linear-gradient(135deg,#0d1a14,#1c1c22)"}}>
+            <Lbl color={C.sage}>Diet Principle</Lbl>
+            <div style={{fontSize:13,color:"#9dd4b5",lineHeight:1.7}}>Protein stays at {targets.protein}g every day — train or rest. Carbs go up on training days. Gentle deficit only (200–300 kcal max). No aggressive cuts — raises cortisol, worsens lipedema.</div>
+          </Card>
+          <Card>
+            <Lbl>Targets — train vs rest</Lbl>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              {[{l:"Calories",tr:PROFILE.train.calories,re:PROFILE.rest.calories,col:C.rose},{l:"Protein",tr:PROFILE.train.protein,re:PROFILE.rest.protein,col:C.rose},{l:"Carbs",tr:PROFILE.train.carbs,re:PROFILE.rest.carbs,col:C.gold},{l:"Fat",tr:PROFILE.train.fat,re:PROFILE.rest.fat,col:C.sage}].map(t=>(
+                <div key={t.l} style={{background:C.surface,borderRadius:12,padding:"10px",border:`1px solid ${C.border}`}}>
+                  <div style={{fontSize:9,color:C.muted,fontWeight:700,letterSpacing:"0.06em",marginBottom:6}}>{t.l}</div>
+                  <div style={{display:"flex",justifyContent:"space-around",alignItems:"center"}}>
+                    <div style={{textAlign:"center"}}><div style={{fontSize:16,fontWeight:800,color:t.col}}>{t.tr}</div><div style={{fontSize:9,color:C.muted}}>🏋️</div></div>
+                    <div style={{width:1,height:24,background:C.border}}/>
+                    <div style={{textAlign:"center"}}><div style={{fontSize:16,fontWeight:800,color:t.col}}>{t.re}</div><div style={{fontSize:9,color:C.muted}}>🌿</div></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+          <Card>
+            <Lbl>Meal ideas — gluten-free & anti-inflammatory</Lbl>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+              {Object.keys(MEAL_IDEAS).map(m=><Btn key={m} small active={mealTab===m} color={C.gold} onClick={()=>setMealTab(m)} style={{textTransform:"capitalize"}}>{m}</Btn>)}
+            </div>
+            {MEAL_IDEAS[mealTab].map((meal,i)=>(
+              <div key={i} style={{display:"flex",gap:10,padding:"8px 0",borderBottom:i<MEAL_IDEAS[mealTab].length-1?`1px solid ${C.border}`:"none"}}>
+                <div style={{width:5,height:5,borderRadius:"50%",background:C.gold,marginTop:5,flexShrink:0}}/>
+                <span style={{fontSize:13,lineHeight:1.5}}>{meal}</span>
+              </div>
+            ))}
+          </Card>
+          {saved.length>0&&<Card>
+            <Lbl>Your food library ({saved.length})</Lbl>
+            <div style={{fontSize:11,color:C.muted,marginBottom:10}}>Builds automatically as you log foods.</div>
+            {saved.map((s,i)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:i<saved.length-1?`1px solid ${C.border}`:"none"}}>
+                <div>
+                  <div style={{display:"flex",alignItems:"center",gap:5}}>
+                    {s.inflammation&&<span style={{color:INFLAM[s.inflammation]?.color,fontSize:9}}>●</span>}
+                    <span style={{fontSize:13,fontWeight:600}}>{s.name}</span>
+                  </div>
+                  <div style={{fontSize:11,color:C.muted}}>{s.serving} · {s.calories} kcal · P:{s.protein}g</div>
+                </div>
+                <Btn small active color={C.sage} onClick={()=>{setTab("today");addFood(s);}}>+ Add</Btn>
+              </div>
+            ))}
+          </Card>}
+        </div>}
+
+        {/* PROGRESS */}
+        {tab==="progress"&&<div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <Card style={{background:"linear-gradient(135deg,#1a0e0e,#1c1c22)"}}>
+            <Lbl color={C.rose}>What to track with lipedema</Lbl>
+            <div style={{fontSize:13,color:C.roseL,lineHeight:1.7}}>The scale lies with lipedema — fluid shifts daily. Your measurements tell the real story. Waist and thighs shrinking while strength increases = you're doing it right, even if the number stays the same.</div>
+          </Card>
+          <Btn active color={C.rose} onClick={()=>setShowMForm(v=>!v)} style={{width:"100%",padding:11,fontSize:13}}>{showMForm?"✕ Cancel":"+ Log measurements"}</Btn>
+          {showMForm&&<Card>
+            <Lbl>{new Date().toLocaleDateString("en-GB")}</Lbl>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+              {MEASURE_FIELDS.map(f=>(
+                <div key={f.key}>
+                  <div style={{fontSize:10,color:C.muted,marginBottom:4}}>{f.label} ({f.unit})</div>
+                  <input type="number" step="0.1" value={newM[f.key]||""} onChange={e=>setNewM(p=>({...p,[f.key]:e.target.value}))} placeholder="0.0"/>
+                </div>
+              ))}
+            </div>
+            <Btn active color={C.sage} onClick={saveMeasure} style={{width:"100%",padding:11}}>Save</Btn>
+          </Card>}
+          {measurements.length===0?<Card><div style={{textAlign:"center",padding:"24px 0",color:C.muted}}><div style={{fontSize:32,marginBottom:10}}>📏</div><div style={{fontSize:14,fontWeight:700,marginBottom:6}}>No entries yet</div><div style={{fontSize:12}}>Log your first measurements above</div></div></Card>
+          :measurements.map((m,i)=>(
+            <Card key={i}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <Lbl>{m.date}</Lbl>
+                {i===0&&<Pill color={C.rose}>Latest</Pill>}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7}}>
+                {MEASURE_FIELDS.filter(f=>m[f.key]).map(f=>{
+                  const prev=measurements[i+1]?.[f.key];
+                  const curr=parseFloat(m[f.key]);
+                  const diff=prev?(curr-parseFloat(prev)).toFixed(1):null;
+                  const lossFields=["weight","waist","hips","thigh_l","thigh_r","calf_l","calf_r"];
+                  const good=diff!==null&&(lossFields.includes(f.key)?parseFloat(diff)<0:parseFloat(diff)>0);
+                  return(
+                    <div key={f.key} style={{background:C.surface,borderRadius:9,padding:"9px 7px",textAlign:"center",border:`1px solid ${C.border}`}}>
+                      <div style={{fontSize:9,color:C.muted,marginBottom:3}}>{f.label}</div>
+                      <div style={{fontSize:14,fontWeight:800}}>{m[f.key]}<span style={{fontSize:9,color:C.muted}}>{f.unit}</span></div>
+                      {diff!==null&&<div style={{fontSize:10,marginTop:2,color:parseFloat(diff)===0?C.muted:good?C.sage:C.gold}}>{parseFloat(diff)>0?"+":""}{diff}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          ))}
+        </div>}
+
+        {/* PROFILE */}
+        {tab==="profile"&&<div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <Card style={{border:`1px solid ${C.sky}44`}}>
+            <Lbl color={C.sky}>Vacation Setup</Lbl>
+            <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
+              <input value={vacDest} onChange={e=>setVacDest(e.target.value)} placeholder="Destination (e.g. Italy)"/>
+              <div style={{display:"flex",gap:8}}>
+                <div style={{flex:1}}><div style={{fontSize:10,color:C.muted,marginBottom:4}}>Start</div><input type="date" value={vacStart} onChange={e=>setVacStart(e.target.value)}/></div>
+                <div style={{flex:1}}><div style={{fontSize:10,color:C.muted,marginBottom:4}}>End</div><input type="date" value={vacEnd} onChange={e=>setVacEnd(e.target.value)}/></div>
+              </div>
+            </div>
+            <Btn active={dayType==="vacation"} color={C.sky} onClick={()=>setDayType("vacation")} style={{width:"100%",padding:11}}>{dayType==="vacation"?"✓ Vacation mode on":"Activate vacation mode"}</Btn>
+            {dayType==="vacation"&&<Btn onClick={()=>setDayType("train")} style={{width:"100%",padding:11,marginTop:8,fontSize:11}}>Back to normal</Btn>}
+          </Card>
+          <Card>
+            <Lbl>Your profile</Lbl>
+            {[["Age","44"],["Weight","50 kg"],["Height","154 cm"],["Condition","Lipedema"],["Goal","Body recomposition — toned, defined, feminine"],["Diet","High-protein · Anti-inflammatory · Gluten-free"],["Equipment","4lb dumbbells + resistance bands (10–30lb)"],["Activity","Very active (5+ days/week)"],["Location","USA / Brazil"]].map(([k,v])=>(
+              <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${C.border}`,gap:10}}>
+                <span style={{fontSize:11,color:C.muted,fontWeight:700,minWidth:80}}>{k}</span>
+                <span style={{fontSize:12,fontWeight:600,textAlign:"right"}}>{v}</span>
+              </div>
+            ))}
+          </Card>
+          <Card style={{background:"linear-gradient(135deg,#1a0e0e,#1c1c22)"}}>
+            <Lbl color={C.rose}>Lipedema — what this means for you</Lbl>
+            {[["Calories","Gentle deficit only — 200–300 max. Cutting hard raises cortisol and makes lipedema worse."],["Training","Resistance builds definition without bulk. Low-impact only. No jumping or heavy plyometrics."],["Carbs","More on training days for fuel. Less on rest days to reduce inflammation."],["Scale","Don't use it as your main metric. Fluid shifts daily with lipedema. Use measurements."],["Lymphatics","Walk daily. Stay hydrated. Compression garments help, especially after training and flying."],["Progress","Recomposition is slow. Expect 3–6 months to see clear visual change. Consistency beats intensity."]].map(([k,v])=>(
+              <div key={k} style={{marginBottom:12}}>
+                <div style={{fontSize:11,color:C.roseL,fontWeight:700,marginBottom:3}}>→ {k}</div>
+                <div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>{v}</div>
+              </div>
+            ))}
+          </Card>
+          <Card>
+            <Lbl>API Key</Lbl>
+            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Used for AI food search and workout proofer.</div>
+            <Btn small color={C.danger} onClick={()=>{localStorage.removeItem(API_KEY_STORAGE);setHasKey(false);}}>Reset API key</Btn>
+          </Card>
+          <Card><div style={{fontSize:11,color:C.muted,textAlign:"center",lineHeight:1.7}}>General wellness guidance only.<br/>Check with your doctor before major changes.</div></Card>
+        </div>}
+
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
